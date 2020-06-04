@@ -4,7 +4,7 @@
 
 #### Data
 
-두 모델의 tokenizer가 다르기 때문에 dataset은 형태소 분석을 한 것, 하지 않은 것 모두 사용해야함
+두 모델의 tokenizer가 다르기 때문에 dataset은 형태소 분석을 한 것, 하지 않은 것 모두 사용해야함  
 형태소 분석이 된 source, 형태소 분석을 하지 않은 target을 input으로 줌
 
 train : valid+test = 9 : 1 로 나눔, test는 15개
