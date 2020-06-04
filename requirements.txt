@@ -1,0 +1,9 @@
+gluonnlp >= 0.8.3
+mxnet
+sentencepiece >= 0.1.6
+torch >= 1.4.0
+pytorch-ignite
+transformers==2.5.1
+tensorboardX==1.8
+tensorflow  # for tensorboardX
+pytorch-pretrained-bert

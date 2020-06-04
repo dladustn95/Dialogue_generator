@@ -1,0 +1,1 @@
+python test.py --vocab_file ./vocab.korean_morp.list --bert_model_path ./
