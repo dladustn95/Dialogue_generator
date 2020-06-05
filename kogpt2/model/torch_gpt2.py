@@ -242,7 +242,10 @@ class MultiHeadAttention(nn.Module):
         if self.scale:
             w = w / math.sqrt(v.size(-1))
         nd, ns = w.size(-2), w.size(-1)
-        b = self.bias[:, :, ns - nd : ns, :ns]
+        if nd > ns :
+            b = self.bias[:, :, :nd, :ns]
+        else:
+            b = self.bias[:, :, ns - nd : ns, :ns]
         w = w * b - 1e4 * (1 - b)
 
         if attention_mask is not None:
@@ -499,18 +502,10 @@ class GPT2Model(GPT2PreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.h[layer].attn.prune_heads(heads)
 
-    def changewte(self, new_vocab_size):
-        add = nn.Embedding(new_vocab_size - self.vocab_size, self.n_embd)
-        newEmbedding = nn.Embedding(new_vocab_size, self.n_embd)
-        newEmbedding.weight = nn.Parameter(torch.cat([self.wte.weight.data, add.weight.data]))
-        self.wte = newEmbedding
-        self.vocab_size = new_vocab_size
-
-
     def forward(
         self,
         input_ids=None,
-        input_hidden = None,
+        input_hidden=None,
         past=None,
         attention_mask=None,
         token_type_ids=None,
@@ -766,15 +761,6 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
 
     def get_output_embeddings(self):
         return self.lm_head
-
-    def changeVocabsize(self, new_vocab_size):
-        self.transformer.changewte(new_vocab_size)
-
-        add = nn.Linear(self.n_embd, new_vocab_size - self.vocab_size)
-        newLinear = nn.Linear(self.n_embd, new_vocab_size)
-        newLinear.weight = nn.Parameter(torch.cat([self.lm_head.weight.data, add.weight.data]))
-        self.lm_head = newLinear
-        self.vocab_size = new_vocab_size
 
     def prepare_inputs_for_generation(self, input_ids, **kwargs):
         # only last token for inputs_ids if past is defined in kwargs

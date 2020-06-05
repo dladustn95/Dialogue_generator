@@ -59,10 +59,38 @@ def get_dataset(bert_tokenizer, gpt_tokenizer, gpt_vocab, dataset_path):
 
     tgtlines = read(dataset_path + "_valid.txt")
     for line in tgtlines:
-        target = gpt_vocab[gpt_tokenizer(line.split("|")[1])]
+        toks = gpt_tokenizer(line.split("|")[1])
+        target = gpt_vocab[toks]
         targetList_valid.append(target)
 
     return sourceList_train, targetList_train, sourceList_valid, targetList_valid
+
+def get_test_dataset(bert_tokenizer, gpt_tokenizer, gpt_vocab, dataset_path):
+    def read(fn):
+        f = open(fn, 'r', encoding="UTF-8-SIG")
+        lines = []
+        for line in f:
+            lines.append(line.strip())
+
+        f.close()
+
+        return lines
+
+    sourceList = []
+    targetList = []
+
+    srclines = read(dataset_path + "_test_tag.txt")
+    for line in srclines:
+        source = bert_tokenizer.tokenize(line.split("|")[0])
+        sourceList.append(source)
+
+    tgtlines = read(dataset_path + "_test.txt")
+    for line in tgtlines:
+        target = gpt_vocab[gpt_tokenizer(line.split("|")[1])]
+        targetList.append(target)
+
+
+    return sourceList, targetList
 
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):
@@ -70,11 +98,11 @@ class AttrDict(dict):
         self.__dict__ = self
 
 
-def make_logdir(model_name: str, train_dataset_path: str):
+def make_logdir(model_name: str, dataset_path: str):
     """Create unique path to save results and checkpoints, e.g. runs/Sep22_19-45-59_gpu-7_gpt2"""
     # Code copied from ignite repo
     current_time = datetime.now().strftime('%b%d_%H-%M-%S')
-    data = train_dataset_path.split("/")[-1]
+    data = dataset_path.split("/")[-1]
     logdir = os.path.join(
-        'runs', current_time + '_' + data + '_' + model_name)
+        'runs', data + '_' + current_time + '_' + model_name)
     return logdir

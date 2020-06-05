@@ -11,12 +11,15 @@ import torch
 import torch.nn.functional as F
 
 from transformers import OpenAIGPTLMHeadModel, OpenAIGPTTokenizer, GPT2LMHeadModel, GPT2Tokenizer
-from train import build_input_from_segments, build_input_from_segments_notopic
-from utils import get_dataset, download_pretrained_model
+from train import build_input_from_segments
+from utils import get_test_dataset, download_pretrained_model
 
 from kogpt2.pytorch_kogpt2 import get_pytorch_conkogpt2_model
 from gluonnlp.data import SentencepieceTokenizer
 from kogpt2.utils import get_tokenizer
+
+from pytorch_pretrained_bert.modeling import BertModel
+from pytorch_pretrained_bert.tokenization_morp import BertTokenizer
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
@@ -59,23 +62,25 @@ def top_filtering(logits, top_k=0., top_p=0.9, threshold=-float('Inf'), filter_v
     return logits
 
 
-def sample_sequence(topic, source, vocab, tokenizer, model, args, current_output=None):
-    bos, eos, speaker1, speaker2 = vocab[vocab.bos_token], vocab[vocab.eos_token], vocab[vocab.cls_token], vocab[vocab.sep_token]
-    token = [47812, 47440, 47774, 47453]
+def sample_sequence(source, bert_model, bert_tokenizer, gpt_model, gpt_vocab, args, current_output=None):
+    bos, eos = gpt_vocab[gpt_vocab.bos_token], gpt_vocab[gpt_vocab.eos_token]
     if current_output is None:
         current_output = []
 
     for i in range(args.max_length):
-        instance = build_input_from_segments_notopic(topic, source, current_output, vocab, tokenizer, with_eos=False)
+        instance = build_input_from_segments(source, current_output, bert_tokenizer, gpt_vocab, with_eos=False)
 
-        input_ids = torch.tensor(instance["input_ids"], device=args.device)
-        token_type_ids = torch.tensor(instance["token_type_ids"], device=args.device)
+        source_ids = torch.tensor([instance["source_ids"]], device=args.device)
+        target_ids = torch.tensor(instance["target_ids"], device=args.device)
 
         #logits = model(input_ids, token_type_ids=token_type_ids)
-        logits = model(input_ids)
+        encoded_layers, pooled_output = bert_model(source_ids)
+        logits = gpt_model(target_ids, encoded_layers[-1])
         if isinstance(logits, tuple):  # for gpt2 and maybe others
             logits = logits[0]
         logits = logits[-1, :] / args.temperature
+
+        """
         if i < args.min_length:
             logits[1] = -float("inf")
             logits[316] = -float("inf")
@@ -85,19 +90,21 @@ def sample_sequence(topic, source, vocab, tokenizer, model, args, current_output
             logits[47440] = -float("inf")
             logits[47774] = -float("inf")
             logits[47453] = -float("inf")
+        """
+
         logits = top_filtering(logits, top_k=args.top_k, top_p=args.top_p)
         probs = F.softmax(logits, dim=-1)
 
         prev = torch.topk(probs, 1)[1] if args.no_sample else torch.multinomial(probs, 1)
-        if i < args.min_length and prev.item() in [bos, eos, speaker1, speaker2]+token:
-            while prev.item() in [bos, eos, speaker1, speaker2]+token:
+        if i < args.min_length and prev.item() in [bos, eos]:
+            while prev.item() in [bos, eos]:
                 if probs.max().item() == 1:
                     warnings.warn("Warning: model generating special token with probability 1.")
                     break  # avoid infinitely looping over special token
-                elif torch.multinomial(probs, 1).item() in [bos, eos, speaker1, speaker2]+token:
+                elif torch.multinomial(probs, 1).item() in [bos, eos]:
                     break
                 prev = torch.multinomial(probs, num_samples=1)
-        elif prev[0].item() in [bos, eos, speaker1, speaker2]:
+        elif prev[0].item() in [bos, eos]:
             break
         current_output.append(prev[0].item())
     return current_output
@@ -105,22 +112,21 @@ def sample_sequence(topic, source, vocab, tokenizer, model, args, current_output
 
 def run():
     parser = ArgumentParser()
-    parser.add_argument("--dataset_path", type=str, default="",
-                        help="Path or url of the dataset. If empty download from S3.")
-    parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (openai-gpt or gpt2)",
-                        choices=['openai-gpt', 'gpt2'])  # anything besides gpt2 will load openai-gpt
+    parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
+    parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (openai-gpt or gpt2)", choices=['openai-gpt', 'gpt2'])  # anything besides gpt2 will load openai-gpt
     parser.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
-                        help="Device (cuda or cpu)")
-
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
+    parser.add_argument("--bert_model_path", default="./", type=str, required=True, help="Bert pre-trained model path")
+    parser.add_argument("--vocab_file", default="./vocab.korean_morp.list", type=str, required=True, help="The vocabulary file that the BERT model was trained on.")
     parser.add_argument("--no_sample", action='store_true', help="Set to use greedy decoding instead of sampling")
-    parser.add_argument("--max_length", type=int, default=20, help="Maximum length of the output utterances")
-    parser.add_argument("--min_length", type=int, default=2, help="Minimum length of the output utterances")
+    parser.add_argument("--max_length", type=int, default=50, help="Maximum length of the output utterances")
+    parser.add_argument("--min_length", type=int, default=1, help="Minimum length of the output utterances")
     parser.add_argument("--seed", type=int, default=0, help="Seed")
-    parser.add_argument("--temperature", type=int, default=0.75, help="Sampling softmax temperature")
-    parser.add_argument("--top_k", type=int, default=25, help="Filter top-k tokens before sampling (<=0: no filtering)")
-    parser.add_argument("--top_p", type=float, default=0.9,
-                        help="Nucleus filtering (top-p) before sampling (<=0.0: no filtering)")
+    parser.add_argument("--temperature", type=int, default=0.7, help="Sampling softmax temperature")
+    parser.add_argument("--top_k", type=int, default=50, help="Filter top-k tokens before sampling (<=0: no filtering)")
+    parser.add_argument("--top_p", type=float, default=0.9, help="Nucleus filtering (top-p) before sampling (<=0.0: no filtering)")
+    parser.add_argument("--do_lower_case", action='store_true', help="Set this flag if you are using an uncased model.")
+
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -140,19 +146,26 @@ def run():
 
     logger.info("Get pretrained model and tokenizer")
 
+    # Load KoBERT model and tokenizer
+    bert_tokenizer = BertTokenizer.from_pretrained(args.vocab_file, do_lower_case=args.do_lower_case)
+    bert_model = BertModel.from_pretrained(args.bert_model_path)
+    bert_model.to(args.device)
+    bert_model.eval()
+
     # Load KoGPT2 model and tokenizer
     tok_path = get_tokenizer()
-    model, vocab = get_pytorch_conkogpt2_model(args.model_checkpoint)
-    tokenizer = SentencepieceTokenizer(tok_path)
-    model.to(args.device)
+    gpt_model, gpt_vocab = get_pytorch_conkogpt2_model(args.model_checkpoint)
+    gpt_tokenizer = SentencepieceTokenizer(tok_path)
+    gpt_model.to(args.device)
+    gpt_model.eval()
 
     logger.info("Load test data")
-    topicList, sourceList, targetList = get_dataset(tokenizer, vocab, args.dataset_path)
+    sourceList, targetList = get_test_dataset(bert_tokenizer, gpt_tokenizer, gpt_vocab, args.dataset_path)
 
     f1 = open((args.model_checkpoint + "_output.txt"), 'w')
-    for line in zip(topicList, sourceList, targetList):
-        out_ids = sample_sequence(line[0], line[1], vocab, tokenizer, model, args)
-        out_texts = vocab.to_tokens(out_ids)
+    for line in zip(sourceList, targetList):
+        out_ids = sample_sequence(line[0], bert_model, bert_tokenizer, gpt_model, gpt_vocab, args)
+        out_texts = gpt_vocab.to_tokens(out_ids)
         for text in out_texts:
             f1.write(text.replace('▁', ' ').replace('</s>',' '))
         """

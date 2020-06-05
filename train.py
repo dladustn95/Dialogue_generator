@@ -27,8 +27,6 @@ from kogpt2.pytorch_kogpt2 import get_pytorch_kogpt2_model
 from gluonnlp.data import SentencepieceTokenizer
 from kogpt2.utils import get_tokenizer
 
-
-from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from pytorch_pretrained_bert.modeling import BertModel
 from pytorch_pretrained_bert.tokenization_morp import BertTokenizer
 
@@ -50,22 +48,25 @@ def average_distributed_scalar(scalar, args):
     torch.distributed.all_reduce(scalar_t, op=torch.distributed.ReduceOp.SUM)
     return scalar_t.item()
 
-def pad_dataset(dataset, max_len, padding=0):
-    """ Pad the dataset. This could be optimized by defining a Dataset class and padding at the batch level, but this is simpler. """
+def pad_dataset(dataset, padding=0):
+    max_s = max(len(x) for x in dataset["source_ids"])
+    max_t = max(len(x) for x in dataset["target_ids"])
+    max_l = max(max_s, max_t)
+
     for name in PADDED_INPUTS:
         if name == "source_ids":
-            dataset[name] = [x + [0] * (max_len - len(x)) for x in dataset[name]]
+            dataset[name] = [x + [0] * (max_l - len(x)) for x in dataset[name]]
         else:
-            dataset[name] = [x + [padding if name != "lm_labels" else -100] * (max_len - len(x)) for x in dataset[name]]
+            dataset[name] = [x + [padding if name != "lm_labels" else -100] * (max_l - len(x)) for x in dataset[name]]
+
     return dataset
 
 def build_input_from_segments(source, target, bert_tokenizer, gpt_vocab, lm_labels=False, with_eos=True):
-    """ Build a sequence of input from 3 segments: persona, history and last reply. """
     bos, eos, = gpt_vocab[gpt_vocab.bos_token], gpt_vocab[gpt_vocab.eos_token]
 
     instance = {}
     instance["source_ids"] = bert_tokenizer.convert_tokens_to_ids(["[CLS]"] + source + ["[SEP]"])
-    instance["target_ids"] = [bos] + target + [eos]
+    instance["target_ids"] = [bos] + target + ([eos] if with_eos else [])
     instance["lm_labels"] = [-100] * len(instance["target_ids"])
     if lm_labels:
         instance["lm_labels"] = [bos] + target + [eos]
@@ -73,7 +74,6 @@ def build_input_from_segments(source, target, bert_tokenizer, gpt_vocab, lm_labe
     return instance
 
 def get_data_loaders(args, bert_tokenizer, gpt_tokenizer, gpt_vocab):
-    """ Prepare the dataset for training and evaluation """
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
 
@@ -93,7 +93,7 @@ def get_data_loaders(args, bert_tokenizer, gpt_tokenizer, gpt_vocab):
     logger.info("Pad inputs and convert to Tensor")
     tensor_datasets = {"train": [], "valid": []}
     for dataset_name, dataset in datasets.items():
-        dataset = pad_dataset(dataset, args.max_len, padding=gpt_vocab[gpt_vocab.padding_token])
+        dataset = pad_dataset(dataset, padding=gpt_vocab[gpt_vocab.padding_token])
         for input_name in MODEL_INPUTS:
             tensor = torch.tensor(dataset[input_name])
             tensor_datasets[dataset_name].append(tensor)
@@ -115,7 +115,6 @@ def train():
     parser.add_argument("--model_checkpoint", type=str, default="condition-gpt", help="Path, url or short name of the model")
     parser.add_argument("--train_batch_size", type=int, default=8, help="Batch size for training")
     parser.add_argument("--valid_batch_size", type=int, default=8, help="Batch size for validation")
-    parser.add_argument("--max_len", type=int, default=128, help="max length of token")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Clipping gradient norm")
@@ -124,8 +123,8 @@ def train():
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
     parser.add_argument("--fp16", type=str, default="", help="Set to O0, O1, O2 or O3 for fp16 training (see apex documentation)")
     parser.add_argument("--local_rank", type=int, default=-1, help="Local rank for distributed training (-1: not distributed)")
-    parser.add_argument("--bert_model_path", default=None, type=str, required=True, help="Bert pre-trained model path")
-    parser.add_argument("--vocab_file", default=None, type=str, required=True, help="The vocabulary file that the BERT model was trained on.")
+    parser.add_argument("--bert_model_path", default="./", type=str, required=True, help="Bert pre-trained model path")
+    parser.add_argument("--vocab_file", default="./vocab.korean_morp.list", type=str, required=True, help="The vocabulary file that the BERT model was trained on.")
     parser.add_argument("--do_lower_case", action='store_true', help="Set this flag if you are using an uncased model.")
     parser.add_argument('--seed', type=int, default=42, help="random seed for initialization")
 
@@ -258,7 +257,7 @@ def train():
         evaluator.add_event_handler(Events.COMPLETED,
                                     lambda _: pbar.log_message("Validation: %s" % pformat(evaluator.state.metrics)))
 
-        log_dir = make_logdir(args.model_checkpoint, args.train_dataset_path)
+        log_dir = make_logdir(args.model_checkpoint, args.dataset_path)
         tb_logger = TensorboardLogger(log_dir)
 
         tb_logger.attach(trainer, log_handler=OutputHandler(tag="training", metric_names=["loss"]), event_name=Events.ITERATION_COMPLETED)
@@ -266,7 +265,7 @@ def train():
         tb_logger.attach(evaluator, log_handler=OutputHandler(tag="validation", metric_names=list(metrics.keys()), another_engine=trainer), event_name=Events.EPOCH_COMPLETED)
 
         checkpoint_handler = ModelCheckpoint(log_dir, 'checkpoint', save_interval=1, n_saved=5)
-        trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler, {'mymodel': getattr(gpt_model, 'module', gpt_model)})  # "getattr" takes care of distributed encapsulation
+        trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler, {'mymodel': gpt_model})  # "getattr" takes care of distributed encapsulation
 
         torch.save(args, log_dir + '/model_training_args.bin')
         getattr(gpt_model, 'module', gpt_model).config.to_json_file(os.path.join(log_dir, CONFIG_NAME))

@@ -42,18 +42,6 @@ kogpt2_config = {
     "n_positions": 1024,
     "vocab_size": 50000
 }
-
-conkogpt2_config = {
-    "initializer_range": 0.02,
-    "layer_norm_epsilon": 1e-05,
-    "n_ctx": 1024,
-    "n_embd": 768,
-    "n_head": 12,
-    "n_layer": 12,
-    "n_positions": 1024,
-    "vocab_size": 50002
-}
-
 def get_pytorch_conkogpt2_model(modelpath, ctx='cpu', cachedir='~/kogpt2/'):
     # download model
     # download vocab
@@ -63,7 +51,7 @@ def get_pytorch_conkogpt2_model(modelpath, ctx='cpu', cachedir='~/kogpt2/'):
                            vocab_info['chksum'],
                            cachedir=cachedir)
 
-    kogpt2model = GPT2LMHeadModel(config=GPT2Config.from_dict(conkogpt2_config))
+    kogpt2model = GPT2LMHeadModel(config=GPT2Config.from_dict(kogpt2_config))
     kogpt2model.load_state_dict(torch.load(modelpath), strict=False)
     vocab_b_obj = nlp.vocab.BERTVocab.from_sentencepiece(vocab_path,
                                                          mask_token=None,
@@ -99,8 +87,8 @@ def get_kogpt2_model(model_file, vocab_file, ctx="cpu"):
     #kogpt2model.eval()
     vocab_b_obj = nlp.vocab.BERTVocab.from_sentencepiece(vocab_file,
                                                          mask_token=None,
-                                                         sep_token='<sep>',
-                                                         cls_token='<cls>',
+                                                         sep_token=None,
+                                                         cls_token=None,
                                                          unknown_token='<unk>',
                                                          padding_token='<pad>',
                                                          bos_token='<s>',
