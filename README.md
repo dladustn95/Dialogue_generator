@@ -1,6 +1,8 @@
 ## Dialogue_generator
 
 
+#### Data
+Adapter module 사용. 자세한 내용은 [Parameter-Efficient Transfer Learning for NLP](https://arxiv.org/pdf/1902.00751.pdf) 참조.
 
 #### Data
 
