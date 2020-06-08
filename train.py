@@ -112,6 +112,7 @@ def get_data_loaders(args, bert_tokenizer, gpt_tokenizer, gpt_vocab):
 def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset.")
+    parser.add_argument("--use_adapter", type=bool, default=True, help="Use adapter or not")
     parser.add_argument("--model_checkpoint", type=str, default="condition-gpt", help="Path, url or short name of the model")
     parser.add_argument("--train_batch_size", type=int, default=8, help="Batch size for training")
     parser.add_argument("--valid_batch_size", type=int, default=8, help="Batch size for validation")
@@ -160,7 +161,7 @@ def train():
 
     # Load KoGPT2 model and tokenizer
     tok_path = get_tokenizer()
-    gpt_model, gpt_vocab = get_pytorch_kogpt2_model()
+    gpt_model, gpt_vocab = get_pytorch_kogpt2_model(use_adapter=args.use_adapter)
     gpt_tokenizer = SentencepieceTokenizer(tok_path)
 
     #model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTDoubleHeadsModel
@@ -168,7 +169,12 @@ def train():
     gpt_model.to(args.device)
     # Add special tokens if they are not already added
     #add_special_tokens_(model, tokenizer)
-    optimizer = AdamW(gpt_model.transformer.m_h.parameters(), lr=args.lr, correct_bias=True)
+    params = list(gpt_model.transformer.ln_f.parameters())
+    for i in gpt_model.transformer.h:
+        params = params + list(i.ln_1.parameters()) + list(i.multihead_attn.parameters()) + list(i.ln_2.parameters())
+        if args.use_adapter:
+            params = params + list(i.adapter1.parameters()) + list(i.adapter2.parameters())
+    optimizer = AdamW(params, lr=args.lr, correct_bias=True)
 
     # Prepare model for FP16 and distributed training if needed (order is important, distributed should be the last)
     #if args.fp16:

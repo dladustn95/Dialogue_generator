@@ -297,6 +297,26 @@ class MultiHeadAttention(nn.Module):
         outputs = [a, present] + attn_outputs[1:]
         return outputs  # a, present, (attentions)
 
+class FeedforawardAdapter(nn.Module):
+    def __init__(self, hidden_size=64, input_size=768, init_scale=1e-3):
+        super().__init__()
+
+        self.down_proj = nn.Linear(input_size, hidden_size, bias=True)
+        nn.init.normal_(self.down_proj.weight,std=init_scale)
+        nn.init.normal_(self.down_proj.bias,std=init_scale)
+        self.up_proj = nn.Linear(hidden_size, input_size, bias=True)
+        nn.init.normal_(self.down_proj.weight,std=init_scale)
+        nn.init.normal_(self.down_proj.bias,std=init_scale)
+        self.act = gelu
+
+    def forward(self, x):
+        y = self.down_proj(x)
+        y = self.act(y)
+        y = self.up_proj(y)
+
+        return x+y
+
+
 class MLP(nn.Module):
     def __init__(self, n_state, config):  # in MLP: n_state=3072 (4 * n_embd)
         super().__init__()
@@ -313,44 +333,39 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, n_ctx, config, scale=False):
+    def __init__(self, n_ctx, config, scale=False, use_adapter=True):
         super().__init__()
         nx = config.n_embd
         self.ln_1 = nn.LayerNorm(nx, eps=config.layer_norm_epsilon)
         self.attn = Attention(nx, n_ctx, config, scale)
+        self.multihead_attn = MultiHeadAttention(nx, n_ctx, config, scale)
         self.ln_2 = nn.LayerNorm(nx, eps=config.layer_norm_epsilon)
-        self.mlp = MLP(4 * nx, config)
 
-    def forward(self, x, layer_past=None, attention_mask=None, head_mask=None):
-        output_attn = self.attn(
-            self.ln_1(x), layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask
-        )
-        a = output_attn[0]  # output_attn: a, present, (attentions)
+        self.use_adapter = use_adapter
+        if self.use_adapter:
+            self.adapter1 = FeedforawardAdapter()
+            self.adapter2 = FeedforawardAdapter()
 
-        x = x + a
-        m = self.mlp(self.ln_2(x))
-        x = x + m
-
-        outputs = [x] + output_attn[1:]
-        return outputs  # x, present, (attentions)
-
-class MultiHeadBlock(nn.Module):
-    def __init__(self, n_ctx, config, scale=False):
-        super().__init__()
-        nx = config.n_embd
-        self.ln_1 = nn.LayerNorm(nx, eps=config.layer_norm_epsilon)
-        self.attn = MultiHeadAttention(nx, n_ctx, config, scale)
-        self.ln_2 = nn.LayerNorm(nx, eps=config.layer_norm_epsilon)
         self.mlp = MLP(4 * nx, config)
 
     def forward(self, query, key, value, layer_past=None, attention_mask=None, head_mask=None):
         output_attn = self.attn(
-            self.ln_1(query), key, value, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask
+            self.ln_1(query), layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask
         )
         a = output_attn[0]  # output_attn: a, present, (attentions)
-
+        if self.use_adapter:
+            a = self.adapter1(a)
         x = query + a
+
+        output_attn = self.multihead_attn(
+            self.ln_1(x), key, value, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask
+        )
+        a = output_attn[0]  # output_attn: a, present, (attentions)
+        x = x + a
+
         m = self.mlp(self.ln_2(x))
+        if self.use_adapter:
+            m = self.adapter2(m)
         x = x + m
 
         outputs = [x] + output_attn[1:]
@@ -483,8 +498,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.wte = nn.Embedding(config.vocab_size, config.n_embd)
         self.wpe = nn.Embedding(config.n_positions, config.n_embd)
         self.drop = nn.Dropout(config.embd_pdrop)
-        self.h = nn.ModuleList([Block(config.n_ctx, config, scale=True) for _ in range(config.n_layer)])
-        self.m_h = nn.ModuleList([MultiHeadBlock(config.n_ctx, config, scale=True) for _ in range(config.n_layer)])
+        self.h = nn.ModuleList([Block(config.n_ctx, config, scale=True, use_adapter=config.use_adapter) for _ in range(config.n_layer)])
         self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
 
         self.init_weights()
@@ -505,7 +519,7 @@ class GPT2Model(GPT2PreTrainedModel):
     def forward(
         self,
         input_ids=None,
-        input_hidden=None,
+        bert_hidden=None,
         past=None,
         attention_mask=None,
         token_type_ids=None,
@@ -594,26 +608,7 @@ class GPT2Model(GPT2PreTrainedModel):
                 all_hidden_states = all_hidden_states + (hidden_states.view(*output_shape),)
 
             outputs = block(
-                hidden_states, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask[i]
-            )
-
-            hidden_states, present = outputs[:2]
-            if self.output_past:
-                presents = presents + (present,)
-
-            if self.output_attentions:
-                all_attentions.append(outputs[2])
-
-        if past is not None:
-            past_length = 0
-            past = [None] * len(self.m_h)
-
-        for i, (block, layer_past) in enumerate(zip(self.m_h, past)):
-            if self.output_hidden_states:
-                all_hidden_states = all_hidden_states + (hidden_states.view(*output_shape),)
-
-            outputs = block(
-                hidden_states, input_hidden, input_hidden, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask[i]
+                hidden_states, bert_hidden, bert_hidden, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask[i]
             )
 
             hidden_states, present = outputs[:2]

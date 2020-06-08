@@ -40,9 +40,22 @@ kogpt2_config = {
     "n_head": 12,
     "n_layer": 12,
     "n_positions": 1024,
-    "vocab_size": 50000
+    "vocab_size": 50000,
+    "use_adapter": False
 }
-def get_pytorch_conkogpt2_model(modelpath, ctx='cpu', cachedir='~/kogpt2/'):
+
+kogpt2_adapter_config = {
+    "initializer_range": 0.02,
+    "layer_norm_epsilon": 1e-05,
+    "n_ctx": 1024,
+    "n_embd": 768,
+    "n_head": 12,
+    "n_layer": 12,
+    "n_positions": 1024,
+    "vocab_size": 50000,
+    "use_adapter": True
+}
+def get_pytorch_conkogpt2_model(modelpath, use_adapter=True, cachedir='~/kogpt2/'):
     # download model
     # download vocab
     vocab_info = tokenizer
@@ -51,7 +64,10 @@ def get_pytorch_conkogpt2_model(modelpath, ctx='cpu', cachedir='~/kogpt2/'):
                            vocab_info['chksum'],
                            cachedir=cachedir)
 
-    kogpt2model = GPT2LMHeadModel(config=GPT2Config.from_dict(kogpt2_config))
+    if use_adapter:
+        kogpt2model = GPT2LMHeadModel(config=GPT2Config.from_dict(kogpt2_adapter_config))
+    else:
+        kogpt2model = GPT2LMHeadModel(config=GPT2Config.from_dict(kogpt2_config))
     kogpt2model.load_state_dict(torch.load(modelpath), strict=False)
     vocab_b_obj = nlp.vocab.BERTVocab.from_sentencepiece(vocab_path,
                                                          mask_token=None,
@@ -63,7 +79,7 @@ def get_pytorch_conkogpt2_model(modelpath, ctx='cpu', cachedir='~/kogpt2/'):
                                                          eos_token='</s>')
     return kogpt2model, vocab_b_obj
 
-def get_pytorch_kogpt2_model(ctx='cpu', cachedir='~/kogpt2/'):
+def get_pytorch_kogpt2_model(use_adapter=True, cachedir='~/kogpt2/'):
     # download model
     model_info = pytorch_kogpt2
     model_path = _download(model_info['url'],
@@ -76,11 +92,14 @@ def get_pytorch_kogpt2_model(ctx='cpu', cachedir='~/kogpt2/'):
                            vocab_info['fname'],
                            vocab_info['chksum'],
                            cachedir=cachedir)
-    return get_kogpt2_model(model_path, vocab_path, ctx)
+    return get_kogpt2_model(model_path, vocab_path, use_adapter)
 
 
-def get_kogpt2_model(model_file, vocab_file, ctx="cpu"):
-    kogpt2model = GPT2LMHeadModel(config=GPT2Config.from_dict(kogpt2_config))
+def get_kogpt2_model(model_file, vocab_file, use_adapter=True):
+    if use_adapter:
+        kogpt2model = GPT2LMHeadModel(config=GPT2Config.from_dict(kogpt2_adapter_config))
+    else:
+        kogpt2model = GPT2LMHeadModel(config=GPT2Config.from_dict(kogpt2_config))
     kogpt2model.load_state_dict(torch.load(model_file), strict=False)
     #device = torch.device(ctx)
     #kogpt2model.to(device)
