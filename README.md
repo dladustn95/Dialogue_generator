@@ -2,16 +2,15 @@
 
 
 
-#### Data
+## Data
+Source|Target 형태로 txt파일 구성.
 
-두 모델의 tokenizer가 다르기 때문에 dataset은 형태소 분석을 한 것, 하지 않은 것 모두 사용해야함  
-형태소 분석이 된 source, 형태소 분석을 하지 않은 target을 input으로 줌
+아래의 형태로 같은 경로에 데이터가 존재해야 함.
+Name_train.txt / Name_train_keyword.txt
+Name_valid.txt / Name_valid_keyword.txt
+Name_test.txt / Name_test_keyword.txt
 
-train : valid+test = 9 : 1 로 나눔, test는 15개
-
-dataset은 name_{train,valid,test}{,_tag}의 형태로 같은 폴더에 존재해야 함
-
-#### How to install
+## How to install
 
 ```sh
 git clone https://github.com/dladustn95/Dialogue_generator.git
@@ -19,9 +18,11 @@ cd Dialogue_generator
 pip install -r requirements.txt
 pip install .
 ```
+  
+pytorch_pretrained_bert 패키지 폴더에 pretrain_bert안에 있는 tokenization2.py 파일 이동  
+현재 폴더에 KoBert 실행을 위한 파일 추가 (vocab.korean.rawtext.list, pytorch_model.bin, bert_config.json)
 
-
-##### Requirements
+### Requirements
 
 * gluonnlp >= 0.8.3
 * mxnet
@@ -37,7 +38,9 @@ pip install .
 
 ### How to use
 
-```
-sh train.sh
+```sh
+python train.py --dataset_path DATAPATH/Name
+python infer.py --dataset_path DATAPATH/Name --model_checkpoint MODELPATH/MODEL.pth
+
 ```
 
