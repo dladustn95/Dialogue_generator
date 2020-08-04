@@ -112,7 +112,7 @@ def get_data_loaders(args, bert_tokenizer, gpt_tokenizer, gpt_vocab):
 def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset.")
-    parser.add_argument("--use_adapter", type=bool, default=True, help="Use adapter or not")
+    parser.add_argument("--use_adapter", default=False, action='store_true', help="Use adapter or not")
     parser.add_argument("--keyword_Module", type=str, default="", help="add, attention, ")
     parser.add_argument("--train_batch_size", type=int, default=8, help="Batch size for training")
     parser.add_argument("--valid_batch_size", type=int, default=8, help="Batch size for validation")
