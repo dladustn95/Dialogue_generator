@@ -37,7 +37,7 @@ pytorch_pretrained_bert 패키지 폴더에 pretrain_bert안에 있는 tokenizat
 ---
 
 ### How to use
-
+adapter 쓰고싶으면 --use_adapter 싫으면 안붙이면 댐
 ```sh
 python train.py --dataset_path DATAPATH/Name
 python infer.py --dataset_path DATAPATH/Name --model_checkpoint MODELPATH/MODEL.pth
