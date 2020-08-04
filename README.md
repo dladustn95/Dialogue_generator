@@ -1,9 +1,6 @@
 ## Dialogue_generator
 
 
-#### Model
-Bert Encoder, GPT2 Decoder를 사용하는 seq2seq 대화 생성 모델  
-Adapter module 사용. 자세한 내용은 [Parameter-Efficient Transfer Learning for NLP](https://arxiv.org/pdf/1902.00751.pdf) 참조.
 
 #### Data
 

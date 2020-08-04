@@ -15,7 +15,7 @@
 # limitations under the License.
 """PyTorch OpenAI GPT-2 model."""
 
-
+import sys
 import logging
 import math
 import os
@@ -316,7 +316,6 @@ class FeedforawardAdapter(nn.Module):
 
         return x+y
 
-
 class MLP(nn.Module):
     def __init__(self, n_state, config):  # in MLP: n_state=3072 (4 * n_embd)
         super().__init__()
@@ -331,15 +330,20 @@ class MLP(nn.Module):
         h2 = self.c_proj(h)
         return self.dropout(h2)
 
-
 class Block(nn.Module):
-    def __init__(self, n_ctx, config, scale=False, use_adapter=True):
+    def __init__(self, n_ctx, config, scale=False, keyword_Module="", use_adapter=True):
         super().__init__()
         nx = config.n_embd
         self.ln_1 = nn.LayerNorm(nx, eps=config.layer_norm_epsilon)
         self.attn = Attention(nx, n_ctx, config, scale)
         self.multihead_attn = MultiHeadAttention(nx, n_ctx, config, scale)
         self.ln_2 = nn.LayerNorm(nx, eps=config.layer_norm_epsilon)
+        self.ln_3 = nn.LayerNorm(nx, eps=config.layer_norm_epsilon)
+
+        self.keyword_Module = keyword_Module
+        if self.keyword_Module == "attention":
+            self.ln_4 = nn.LayerNorm(nx, eps=config.layer_norm_epsilon)
+            self.multihead_attn2 = MultiHeadAttention(nx, n_ctx, config, scale)
 
         self.use_adapter = use_adapter
         if self.use_adapter:
@@ -348,7 +352,7 @@ class Block(nn.Module):
 
         self.mlp = MLP(4 * nx, config)
 
-    def forward(self, query, key, value, layer_past=None, attention_mask=None, head_mask=None):
+    def forward(self, query, key, value, key_key=None, key_value=None, layer_past=None, attention_mask=None, head_mask=None):
         output_attn = self.attn(
             self.ln_1(query), layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask
         )
@@ -358,14 +362,43 @@ class Block(nn.Module):
         x = query + a
 
         output_attn = self.multihead_attn(
-            self.ln_1(x), key, value, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask
+            self.ln_3(x), key, value, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask
         )
         a = output_attn[0]  # output_attn: a, present, (attentions)
         x = x + a
+        if self.keyword_Module == "attention":
+            output_attn = self.multihead_attn2(
+                self.ln_4(x), key_key, key_value, layer_past=layer_past, attention_mask=attention_mask,
+                head_mask=head_mask
+            )
+            a = output_attn[0]  # output_attn: a, present, (attentions)
+            x = x + a
 
         m = self.mlp(self.ln_2(x))
         if self.use_adapter:
             m = self.adapter2(m)
+        x = x + m
+
+        outputs = [x] + output_attn[1:]
+        return outputs  # x, present, (attentions)
+
+class EncoderBlock(nn.Module):
+    def __init__(self, n_ctx, config, scale=False):
+        super().__init__()
+        nx = config.n_embd
+        self.ln_1 = nn.LayerNorm(nx, eps=config.layer_norm_epsilon)
+        self.attn = Attention(nx, n_ctx, config, scale)
+        self.ln_2 = nn.LayerNorm(nx, eps=config.layer_norm_epsilon)
+        self.mlp = MLP(4 * nx, config)
+
+    def forward(self, x, layer_past=None, attention_mask=None, head_mask=None):
+        output_attn = self.attn(
+            self.ln_1(x), layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask
+        )
+        a = output_attn[0]  # output_attn: a, present, (attentions)
+
+        x = x + a
+        m = self.mlp(self.ln_2(x))
         x = x + m
 
         outputs = [x] + output_attn[1:]
@@ -498,7 +531,190 @@ class GPT2Model(GPT2PreTrainedModel):
         self.wte = nn.Embedding(config.vocab_size, config.n_embd)
         self.wpe = nn.Embedding(config.n_positions, config.n_embd)
         self.drop = nn.Dropout(config.embd_pdrop)
-        self.h = nn.ModuleList([Block(config.n_ctx, config, scale=True, use_adapter=config.use_adapter) for _ in range(config.n_layer)])
+        self.h = nn.ModuleList([EncoderBlock(config.n_ctx, config, scale=True) for _ in range(config.n_layer)])
+        self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+
+        self.init_weights()
+
+    def get_input_embeddings(self):
+        return self.wte
+
+    def set_input_embeddings(self, new_embeddings):
+        self.wte = new_embeddings
+
+    def _prune_heads(self, heads_to_prune):
+        """ Prunes heads of the model.
+            heads_to_prune: dict of {layer_num: list of heads to prune in this layer}
+        """
+        for layer, heads in heads_to_prune.items():
+            self.h[layer].attn.prune_heads(heads)
+
+    def changewte(self, new_vocab_size):
+        add = nn.Embedding(new_vocab_size - self.vocab_size, self.n_embd)
+        newEmbedding = nn.Embedding(new_vocab_size, self.n_embd)
+        newEmbedding.weight = nn.Parameter(torch.cat([self.wte.weight.data, add.weight.data]))
+        self.wte = newEmbedding
+        self.vocab_size = new_vocab_size
+
+
+    def forward(
+        self,
+        input_ids=None,
+        past=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+    ):
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        elif input_ids is not None:
+            input_shape = input_ids.size()
+            input_ids = input_ids.view(-1, input_shape[-1])
+        elif inputs_embeds is not None:
+            input_shape = inputs_embeds.size()[:-1]
+        else:
+            raise ValueError("You have to specify either input_ids or inputs_embeds")
+
+        if token_type_ids is not None:
+            token_type_ids = token_type_ids.view(-1, input_shape[-1])
+        if position_ids is not None:
+            position_ids = position_ids.view(-1, input_shape[-1])
+
+        if past is None:
+            past_length = 0
+            past = [None] * len(self.h)
+        else:
+            past_length = past[0][0].size(-2)
+        if position_ids is None:
+            device = input_ids.device if input_ids is not None else inputs_embeds.device
+            position_ids = torch.arange(past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
+            position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
+
+        # Attention mask.
+        if attention_mask is not None:
+            attention_mask = attention_mask.view(-1, input_shape[-1])
+            # We create a 3D attention mask from a 2D tensor mask.
+            # Sizes are [batch_size, 1, 1, to_seq_length]
+            # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
+            # this attention mask is more simple than the triangular masking of causal attention
+            # used in OpenAI GPT, we just need to prepare the broadcast dimension here.
+            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+
+            # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
+            # masked positions, this operation will create a tensor which is 0.0 for
+            # positions we want to attend and -10000.0 for masked positions.
+            # Since we are adding it to the raw scores before the softmax, this is
+            # effectively the same as removing these entirely.
+            attention_mask = attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
+            attention_mask = (1.0 - attention_mask) * -10000.0
+
+        # Prepare head mask if needed
+        # 1.0 in head_mask indicate we keep the head
+        # attention_probs has shape bsz x n_heads x N x N
+        # head_mask has shape n_layer x batch x n_heads x N x N
+        if head_mask is not None:
+            if head_mask.dim() == 1:
+                head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+                head_mask = head_mask.expand(self.config.n_layer, -1, -1, -1, -1)
+            elif head_mask.dim() == 2:
+                head_mask = (
+                    head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
+                )  # We can specify head_mask for each layer
+            head_mask = head_mask.to(
+                dtype=next(self.parameters()).dtype
+            )  # switch to fload if need + fp16 compatibility
+        else:
+            head_mask = [None] * self.config.n_layer
+
+        if inputs_embeds is None:
+            inputs_embeds = self.wte(input_ids)
+        position_embeds = self.wpe(position_ids)
+        if token_type_ids is not None:
+            token_type_embeds = self.wte(token_type_ids)
+        else:
+            token_type_embeds = 0
+        hidden_states = inputs_embeds + position_embeds + token_type_embeds
+        hidden_states = self.drop(hidden_states)
+
+        output_shape = input_shape + (hidden_states.size(-1),)
+        presents = ()
+        all_attentions = []
+        all_hidden_states = ()
+        for i, (block, layer_past) in enumerate(zip(self.h, past)):
+            if self.output_hidden_states:
+                all_hidden_states = all_hidden_states + (hidden_states.view(*output_shape),)
+            outputs = block(
+                hidden_states, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask[i]
+            )
+
+            hidden_states, present = outputs[:2]
+            if self.output_past:
+                presents = presents + (present,)
+
+            if self.output_attentions:
+                all_attentions.append(outputs[2])
+
+        hidden_states = self.ln_f(hidden_states)
+
+        hidden_states = hidden_states.view(*output_shape)
+        # Add last hidden state
+        if self.output_hidden_states:
+            all_hidden_states = all_hidden_states + (hidden_states,)
+
+        outputs = (hidden_states,)
+        if self.output_past:
+            outputs = outputs + (presents,)
+        if self.output_hidden_states:
+            outputs = outputs + (all_hidden_states,)
+        if self.output_attentions:
+            # let the number of heads free (-1) so we can extract attention even after head pruning
+            attention_output_shape = input_shape[:-1] + (-1,) + all_attentions[0].shape[-2:]
+            all_attentions = tuple(t.view(*attention_output_shape) for t in all_attentions)
+            outputs = outputs + (all_attentions,)
+        return outputs  # last hidden state, (presents), (all hidden_states), (attentions)
+
+class GPT2Model_decoder(GPT2PreTrainedModel):
+    r"""
+    Outputs: `Tuple` comprising various elements depending on the configuration (config) and inputs:
+        **last_hidden_state**: ``torch.FloatTensor`` of shape ``(batch_size, sequence_length, hidden_size)``
+            Sequence of hidden-states at the last layer of the model.
+        **past**:
+            list of ``torch.FloatTensor`` (one for each layer) of shape ``(2, batch_size, num_heads, sequence_length, embed_size_per_head)``:
+            that contains pre-computed hidden-states (key and values in the attention blocks).
+            Can be used (see `past` input) to speed up sequential decoding. The token ids which have their past given to this model
+            should not be passed as input ids as they have already been computed.
+        **hidden_states**: (`optional`, returned when ``config.output_hidden_states=True``)
+            list of ``torch.FloatTensor`` (one for the output of each layer + the output of the embeddings)
+            of shape ``(batch_size, sequence_length, hidden_size)``:
+            Hidden-states of the model at the output of each layer plus the initial embedding outputs.
+        **attentions**: (`optional`, returned when ``config.output_attentions=True``)
+            list of ``torch.FloatTensor`` (one for each layer) of shape ``(batch_size, num_heads, sequence_length, sequence_length)``:
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention heads.
+
+    Examples::
+
+        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        model = GPT2Model.from_pretrained('gpt2')
+        input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(0)  # Batch size 1
+        outputs = model(input_ids)
+        last_hidden_states = outputs[0]  # The last hidden-state is the first element of the output tuple
+
+    """
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.output_hidden_states = config.output_hidden_states
+        self.output_attentions = config.output_attentions
+        self.output_past = config.output_past
+        self.vocab_size = config.vocab_size
+        self.n_embd = config.n_embd
+
+        self.wte = nn.Embedding(config.vocab_size, config.n_embd)
+        self.wpe = nn.Embedding(config.n_positions, config.n_embd)
+        self.drop = nn.Dropout(config.embd_pdrop)
+        self.h = nn.ModuleList([Block(config.n_ctx, config, scale=True, keyword_Module=config.keyword_Module, use_adapter=config.use_adapter) for _ in range(config.n_layer)])
         self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
 
         self.init_weights()
@@ -520,6 +736,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self,
         input_ids=None,
         bert_hidden=None,
+        attention_score=None,
         past=None,
         attention_mask=None,
         token_type_ids=None,
@@ -608,7 +825,7 @@ class GPT2Model(GPT2PreTrainedModel):
                 all_hidden_states = all_hidden_states + (hidden_states.view(*output_shape),)
 
             outputs = block(
-                hidden_states, bert_hidden, bert_hidden, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask[i]
+                hidden_states, bert_hidden, bert_hidden, key_key=attention_score, key_value=attention_score, layer_past=layer_past, attention_mask=attention_mask, head_mask=head_mask[i]
             )
 
             hidden_states, present = outputs[:2]
@@ -644,7 +861,7 @@ class GPT2Model(GPT2PreTrainedModel):
     GPT2_START_DOCSTRING,
     GPT2_INPUTS_DOCSTRING,
 )
-class GPT2LMHeadModel(GPT2PreTrainedModel):
+class GPT2LMHeadModelEncoder(GPT2PreTrainedModel):
     r"""
         **labels**: (`optional`) ``torch.LongTensor`` of shape ``(batch_size, sequence_length)``:
             Labels for language modeling.
@@ -773,7 +990,6 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
     def forward(
         self,
         input_ids=None,
-        input_hidden = None,
         past=None,
         attention_mask=None,
         token_type_ids=None,
@@ -784,7 +1000,6 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
     ):
         transformer_outputs = self.transformer(
             input_ids,
-            input_hidden,
             past=past,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -806,7 +1021,173 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
             outputs = (loss,) + outputs
 
-        return outputs  # (loss), lm_logits, presents, (all hidden_states), (attentions)
+        return outputs  # (loss), lm_logits, (presents), (all hidden_states), (attentions)
+
+class GPT2LMHeadModel(GPT2PreTrainedModel):
+    r"""
+        **labels**: (`optional`) ``torch.LongTensor`` of shape ``(batch_size, sequence_length)``:
+            Labels for language modeling.
+            Note that the labels **are shifted** inside the model, i.e. you can set ``lm_labels = input_ids``
+            Indices are selected in ``[-100, 0, ..., config.vocab_size]``
+            All labels set to ``-100`` are ignored (masked), the loss is only
+            computed for labels in ``[0, ..., config.vocab_size]``
+
+    Outputs: `Tuple` comprising various elements depending on the configuration (config) and inputs:
+        **loss**: (`optional`, returned when ``labels`` is provided) ``torch.FloatTensor`` of shape ``(1,)``:
+            Language modeling loss.
+        **prediction_scores**: ``torch.FloatTensor`` of shape ``(batch_size, sequence_length, config.vocab_size)``
+            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
+        **past**:
+            list of ``torch.FloatTensor`` (one for each layer) of shape ``(2, batch_size, num_heads, sequence_length, embed_size_per_head)``:
+            that contains pre-computed hidden-states (key and values in the attention blocks).
+            Can be used (see `past` input) to speed up sequential decoding. The token ids which have their past given to this model
+            should not be passed as input ids as they have already been computed.
+        **hidden_states**: (`optional`, returned when ``config.output_hidden_states=True``)
+            list of ``torch.FloatTensor`` (one for the output of each layer + the output of the embeddings)
+            of shape ``(batch_size, sequence_length, hidden_size)``:
+            Hidden-states of the model at the output of each layer plus the initial embedding outputs.
+        **attentions**: (`optional`, returned when ``config.output_attentions=True``)
+            list of ``torch.FloatTensor`` (one for each layer) of shape ``(batch_size, num_heads, sequence_length, sequence_length)``:
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention heads.
+
+    Examples::
+
+        import torch
+        from transformers import GPT2Tokenizer, GPT2LMHeadModel
+
+        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        model = GPT2LMHeadModel.from_pretrained('gpt2')
+
+        input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(0)  # Batch size 1
+        outputs = model(input_ids, labels=input_ids)
+        loss, logits = outputs[:2]
+
+    """
+    """
+    GPT2Config {
+          "_num_labels": 2,
+          "activation_function": "gelu_new",
+          "architectures": null,
+          "attn_pdrop": 0.1,
+          "bad_words_ids": null,
+          "bos_token_id": 50256,
+          "decoder_start_token_id": null,
+          "do_sample": false,
+          "early_stopping": false,
+          "embd_pdrop": 0.1,
+          "eos_token_id": 50256,
+          "finetuning_task": null,
+          "id2label": {
+            "0": "LABEL_0",
+            "1": "LABEL_1"
+          },
+          "initializer_range": 0.02,
+          "is_decoder": false,
+          "is_encoder_decoder": false,
+          "label2id": {
+            "LABEL_0": 0,
+            "LABEL_1": 1
+          },
+          "layer_norm_epsilon": 1e-05,
+          "length_penalty": 1.0,
+          "max_length": 20,
+          "min_length": 0,
+          "model_type": "gpt2",
+          "n_ctx": 1024,
+          "n_embd": 768,
+          "n_head": 12,
+          "n_layer": 12,
+          "n_positions": 1024,
+          "no_repeat_ngram_size": 0,
+          "num_beams": 1,
+          "num_return_sequences": 1,
+          "output_attentions": false,
+          "output_hidden_states": false,
+          "output_past": true,
+          "pad_token_id": null,
+          "prefix": null,
+          "pruned_heads": {},
+          "repetition_penalty": 1.0,
+          "resid_pdrop": 0.1,
+          "summary_activation": null,
+          "summary_first_dropout": 0.1,
+          "summary_proj_to_labels": true,
+          "summary_type": "cls_index",
+          "summary_use_proj": true,
+          "task_specific_params": null,
+          "temperature": 1.0,
+          "top_k": 50,
+          "top_p": 1.0,
+          "torchscript": false,
+          "use_bfloat16": false,
+          "vocab_size": 50000
+    }
+"""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.transformer = GPT2Model_decoder(config)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.vocab_size = config.vocab_size
+        self.n_embd = config.n_embd
+
+        self.init_weights()
+
+    def get_output_embeddings(self):
+        return self.lm_head
+
+    def prepare_inputs_for_generation(self, input_ids, **kwargs):
+        # only last token for inputs_ids if past is defined in kwargs
+        if "attention_mask" in kwargs and kwargs["attention_mask"] is not None:
+            kwargs["attention_mask"] = None
+        if "past" in kwargs and kwargs["past"]:
+            input_ids = input_ids[:, -1].unsqueeze(-1)
+            if "token_type_ids" in kwargs and kwargs["token_type_ids"] is not None:
+                kwargs["token_type_ids"] = kwargs["token_type_ids"][-1]
+        inputs = {"input_ids": input_ids}
+        inputs.update(kwargs)
+
+        return inputs
+
+    def forward(
+        self,
+        input_ids=None,
+        input_hidden=None,
+        attention_score=None,
+        past=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+    ):
+        transformer_outputs = self.transformer(
+            input_ids,
+            input_hidden,
+            attention_score=attention_score,
+            past=past,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+        )
+        hidden_states = transformer_outputs[0]
+
+        lm_logits = self.lm_head(hidden_states)
+
+        outputs = (lm_logits,) + transformer_outputs[1:]
+        if labels is not None:
+            # Shift so that tokens < n predict n
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            outputs = (loss,) + outputs
+
+        return outputs  # (loss), lm_logits, (presents), (all hidden_states), (attentions)
 
 
 @add_start_docstrings(

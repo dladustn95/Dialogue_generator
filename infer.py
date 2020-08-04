@@ -19,10 +19,8 @@ from gluonnlp.data import SentencepieceTokenizer
 from kogpt2.utils import get_tokenizer
 
 from pytorch_pretrained_bert.modeling import BertModel
-from pytorch_pretrained_bert.tokenization_morp import BertTokenizer
+from pytorch_pretrained_bert.tokenization2 import BertTokenizer
 
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
 def top_filtering(logits, top_k=0., top_p=0.9, threshold=-float('Inf'), filter_value=-float('Inf')):
     """ Filter a distribution of logits using top-k, top-p (nucleus) and/or threshold filtering
         Args:

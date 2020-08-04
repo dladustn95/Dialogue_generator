@@ -36,8 +36,8 @@ from kogpt2.model.Seq2Seq import Seq2Seq
 
 TOKENS = ["<bos>", "<eos>", "<cls>", "<sep>", "<pad>"]
 
-MODEL_INPUTS = ["source_ids", "target_ids", "lm_labels"]
-PADDED_INPUTS = ["source_ids", "target_ids", "lm_labels"]
+MODEL_INPUTS = ["source_ids", "target_ids", "lm_labels", "key_scores"]
+PADDED_INPUTS = ["source_ids", "target_ids", "lm_labels", "key_scores"]
 
 logger = logging.getLogger(__file__)
 
@@ -64,7 +64,7 @@ def pad_dataset(dataset, padding=0):
 
     return dataset
 
-def build_input_from_segments(source, target, bert_tokenizer, gpt_vocab, lm_labels=False, with_eos=True):
+def build_input_from_segments(source, target, score, bert_tokenizer, gpt_vocab, lm_labels=False, with_eos=True):
     bos, eos, = gpt_vocab[gpt_vocab.bos_token], gpt_vocab[gpt_vocab.eos_token]
 
     instance = {}
@@ -73,6 +73,7 @@ def build_input_from_segments(source, target, bert_tokenizer, gpt_vocab, lm_labe
     instance["lm_labels"] = [-100] * len(instance["target_ids"])
     if lm_labels:
         instance["lm_labels"] = [bos] + target + [eos]
+    instance["key_scores"] = score
     return instance
 
 def get_data_loaders(args, bert_tokenizer, gpt_tokenizer, gpt_vocab):
@@ -81,12 +82,12 @@ def get_data_loaders(args, bert_tokenizer, gpt_tokenizer, gpt_vocab):
 
     sourceList_train, targetList_train, attentionList_train, sourceList_valid, targetList_valid, attentionList_valid = get_dataset(bert_tokenizer, gpt_tokenizer, gpt_vocab, args.dataset_path)
     for line in zip(sourceList_train, targetList_train, attentionList_train):
-        instance = build_input_from_segments(line[0], line[1], bert_tokenizer, gpt_vocab, True)
+        instance = build_input_from_segments(line[0], line[1], line[2], bert_tokenizer, gpt_vocab, True)
         for input_name, input_array in instance.items():
             datasets["train"][input_name].append(input_array)
 
     for line in zip(sourceList_valid, targetList_valid, attentionList_valid):
-        instance = build_input_from_segments(line[0], line[1], bert_tokenizer, gpt_vocab, True)
+        instance = build_input_from_segments(line[0], line[1], line[2], bert_tokenizer, gpt_vocab, True)
         for input_name, input_array in instance.items():
             datasets["valid"][input_name].append(input_array)
 
@@ -115,8 +116,8 @@ def train():
     parser.add_argument("--use_adapter", type=bool, default=True, help="Use adapter or not")
     parser.add_argument("--keyword_Module", type=str, default="", help="add, attention, ")
     parser.add_argument("--model_checkpoint", type=str, default="bertGpt_keymodule", help="Path, url or short name of the model")
-    parser.add_argument("--train_batch_size", type=int, default=8, help="Batch size for training")
-    parser.add_argument("--valid_batch_size", type=int, default=8, help="Batch size for validation")
+    parser.add_argument("--train_batch_size", type=int, default=16, help="Batch size for training")
+    parser.add_argument("--valid_batch_size", type=int, default=16, help="Batch size for validation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Clipping gradient norm")
@@ -184,10 +185,10 @@ def train():
     def update(engine, batch):
         model.train()
         batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
-        source_ids, target_ids, lm_labels = batch
+        source_ids, target_ids, lm_labels, keyword_scores = batch
 
         #(lm_loss), *_ = model(input_ids, token_type_ids=token_type_ids, labels=lm_labels)
-        (lm_loss), *_ = model(source_ids, target_ids, lm_labels=lm_labels)
+        (lm_loss), *_ = model(source_ids, target_ids, key_score=keyword_scores, lm_labels=lm_labels)
         loss = lm_loss / args.gradient_accumulation_steps
 
         if args.fp16:
@@ -210,10 +211,10 @@ def train():
         model.eval()
         with torch.no_grad():
             batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
-            source_ids, target_ids, lm_labels = batch
+            source_ids, target_ids, lm_labels, keyword_scores = batch
 
             #lm_logits, *_ = model(input_ids, token_type_ids=token_type_ids,)
-            lm_logits, *_ = model(source_ids, target_ids)
+            lm_logits, *_ = model(source_ids, target_ids, key_score=keyword_scores)
             lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
             lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
             return (lm_logits_flat_shifted), (lm_labels_flat_shifted)
