@@ -13,44 +13,64 @@ class Seq2Seq(nn.Module):
         self.decoder = decoder
         self.vocab = gpt_vocab
         self.device = args.device
-        self.keyword_Module = args.keyword_Module
+        self.keyword_module = args.keyword_module
 
     def forward(self, source_ids, target_ids, key_score=None, lm_labels=None):
         encoded_layers, pooled_output = self.encoder(source_ids)
-
-        if self.keyword_Module == "add":
-            key_score = key_score.tolist()
-            for i, score in enumerate(key_score):
-                key_score_list = list(filter(lambda a: a != self.vocab[self.vocab.padding_token], score))
-                key_score_list = list(map(lambda a: a-min(key_score_list), key_score_list))
-                key_score_list = list(map(lambda a: a/max(key_score_list), key_score_list))
-                key_score_list = list(map(lambda a: a + 0.5, key_score_list))
-
-                """
-                """
-                tmp = torch.tensor(key_score_list)
-                tmp = F.softmax(tmp, dim=-1)
-                tmp = tmp.tolist()
-                for k,v in enumerate(tmp):
-                    encoded_layers[-1][i][k+1] = encoded_layers[-1][i][k+1]*2
-
+        
         if lm_labels is not None:
-            if self.keyword_Module == "attention":
+            if self.keyword_module == "attention":
                 size = key_score.size()
                 key_score = key_score.unsqueeze(-1)
                 key_score = key_score.expand(size[0],size[1], 768)
                 outputs = self.decoder(target_ids, encoded_layers[-1], attention_score=key_score, labels=lm_labels)
                 return outputs
+
+            elif self.keyword_module == "add":
+                encoded_layers_key = encoded_layers
+                key_score = key_score.tolist()
+                for i, score in enumerate(key_score):
+                    key_score_list = list(filter(lambda a: a != self.vocab[self.vocab.padding_token], score))
+                    key_score_list = list(map(lambda a: a - min(key_score_list), key_score_list))
+                    key_score_list = list(map(lambda a: a / max(key_score_list), key_score_list))
+                    #key_score_list = list(map(lambda a: a + 1, key_score_list))
+
+                    tmp = torch.tensor(key_score_list)
+                    tmp = tmp.tolist()
+                    for k, v in enumerate(tmp):
+                        encoded_layers_key[-1][i][k + 1] = encoded_layers_key[-1][i][k + 1] * v
+
+                outputs = self.decoder(target_ids, encoded_layers[-1], attention_score=encoded_layers_key[-1], labels=lm_labels)
+                return outputs
+
             else:
                 outputs = self.decoder(target_ids, encoded_layers[-1], labels=lm_labels)
                 return outputs
         else:
-            if self.keyword_Module == "attention":
+            if self.keyword_module == "attention":
                 size = key_score.size()
                 key_score = key_score.unsqueeze(-1)
                 key_score = key_score.expand(size[0],size[1], 768)
                 outputs = self.decoder(target_ids, encoded_layers[-1], attention_score=key_score)
                 return outputs
+
+            elif self.keyword_module == "add":
+                encoded_layers_key = encoded_layers
+                key_score = key_score.tolist()
+                for i, score in enumerate(key_score):
+                    key_score_list = list(filter(lambda a: a != self.vocab[self.vocab.padding_token], score))
+                    key_score_list = list(map(lambda a: a - min(key_score_list), key_score_list))
+                    key_score_list = list(map(lambda a: a / max(key_score_list), key_score_list))
+                    #key_score_list = list(map(lambda a: a + 1, key_score_list))
+
+                    tmp = torch.tensor(key_score_list)
+                    tmp = tmp.tolist()
+                    for k, v in enumerate(tmp):
+                        encoded_layers_key[-1][i][k + 1] = encoded_layers_key[-1][i][k + 1] * v
+
+                outputs = self.decoder(target_ids, encoded_layers[-1], attention_score=encoded_layers_key[-1])
+                return outputs
+
             else:
                 outputs = self.decoder(target_ids, encoded_layers[-1])
                 return outputs

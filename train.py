@@ -8,8 +8,6 @@ import logging
 from pprint import pformat
 from argparse import ArgumentParser
 from collections import defaultdict
-from itertools import chain
-import argparse
 import random
 import numpy as np
 
@@ -25,7 +23,7 @@ from transformers import (AdamW, WEIGHTS_NAME, CONFIG_NAME)
 
 from utils import get_dataset, make_logdir
 
-from kogpt2.pytorch_kogpt2 import get_pytorch_kogpt2_model
+from kogpt2.pytorch_kogpt2 import get_pytorch_conkogpt2_model2
 from gluonnlp.data import SentencepieceTokenizer
 from kogpt2.utils import get_tokenizer
 
@@ -81,12 +79,12 @@ def get_data_loaders(args, bert_tokenizer, gpt_tokenizer, gpt_vocab):
 
     sourceList_train, targetList_train, sourceList_valid, targetList_valid = get_dataset(bert_tokenizer, gpt_tokenizer, gpt_vocab, args.dataset_path)
     for line in zip(sourceList_train, targetList_train):
-        instance = build_input_from_segments(line[0], bert_tokenizer, gpt_vocab, True)
+        instance = build_input_from_segments(line[0], line[1], bert_tokenizer, gpt_vocab, True)
         for input_name, input_array in instance.items():
             datasets["train"][input_name].append(input_array)
 
     for line in zip(sourceList_valid, targetList_valid):
-        instance = build_input_from_segments(line[0], bert_tokenizer, gpt_vocab, True)
+        instance = build_input_from_segments(line[0], line[1], bert_tokenizer, gpt_vocab, True)
         for input_name, input_array in instance.items():
             datasets["valid"][input_name].append(input_array)
 
@@ -114,6 +112,7 @@ def train():
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset.")
     parser.add_argument("--use_adapter", default=False, action='store_true', help="Use adapter or not")
     parser.add_argument("--keyword_Module", type=str, default="", help="add, attention, ")
+    parser.add_argument("--model_checkpoint", type=str, default="bertGpt", help="Path, url or short name of the model")
     parser.add_argument("--train_batch_size", type=int, default=8, help="Batch size for training")
     parser.add_argument("--valid_batch_size", type=int, default=8, help="Batch size for validation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
@@ -161,7 +160,7 @@ def train():
 
     # Load KoGPT2 model and tokenizer
     tok_path = get_tokenizer()
-    gpt_model, gpt_vocab = get_pytorch_kogpt2_model(keyword_Module=args.keyword_Module, use_adapter=args.use_adapter)
+    gpt_model, gpt_vocab = get_pytorch_conkogpt2_model2(keyword_Module=args.keyword_Module, use_adapter=args.use_adapter)
     gpt_tokenizer = SentencepieceTokenizer(tok_path)
     gpt_model.to(args.device)
 
@@ -250,7 +249,7 @@ def train():
         evaluator.add_event_handler(Events.COMPLETED,
                                     lambda _: pbar.log_message("Validation: %s" % pformat(evaluator.state.metrics)))
 
-        log_dir = make_logdir(args.dataset_path, args.use_adapter, args.keyword_Module)
+        log_dir = make_logdir(args.model_checkpoint, args.dataset_path, args.keyword_Module)
         tb_logger = TensorboardLogger(log_dir)
 
         tb_logger.attach(trainer, log_handler=OutputHandler(tag="training", metric_names=["loss"]), event_name=Events.ITERATION_COMPLETED)

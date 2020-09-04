@@ -2,10 +2,9 @@ import os
 import logging
 import random
 from argparse import ArgumentParser
-from itertools import chain
 from pprint import pformat
 import warnings
-import datetime
+import sys
 
 import torch
 import torch.nn.functional as F
@@ -114,19 +113,19 @@ def sample_sequence(source, attention, bert_tokenizer, model, gpt_vocab, args, c
 def run():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
-    parser.add_argument("--use_adapter", type=bool, default=True, help="Use adapter or not")
-    parser.add_argument("--keyword_Module", type=str, default="", help="add, attention, ")
+    parser.add_argument("--use_adapter", default=False, action='store_true', help="Use adapter or not")
+    parser.add_argument("--keyword_module", type=str, default="", help="add, attention, ")
     parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (openai-gpt or gpt2)", choices=['openai-gpt', 'gpt2'])  # anything besides gpt2 will load openai-gpt
     parser.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
+    parser.add_argument("--device", type=str, default="cpu" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
     parser.add_argument("--bert_model_path", default="./", type=str, help="Bert pre-trained model path")
     parser.add_argument("--vocab_file", default="./vocab.korean.rawtext.list", type=str, help="The vocabulary file that the BERT model was trained on.")
     parser.add_argument("--no_sample", action='store_true', help="Set to use greedy decoding instead of sampling")
     parser.add_argument("--max_length", type=int, default=50, help="Maximum length of the output utterances")
     parser.add_argument("--min_length", type=int, default=1, help="Minimum length of the output utterances")
     parser.add_argument("--seed", type=int, default=0, help="Seed")
-    parser.add_argument("--temperature", type=int, default=0.8, help="Sampling softmax temperature")
-    parser.add_argument("--top_k", type=int, default=30, help="Filter top-k tokens before sampling (<=0: no filtering)")
+    parser.add_argument("--temperature", type=int, default=0.7, help="Sampling softmax temperature")
+    parser.add_argument("--top_k", type=int, default=50, help="Filter top-k tokens before sampling (<=0: no filtering)")
     parser.add_argument("--top_p", type=float, default=0.9, help="Nucleus filtering (top-p) before sampling (<=0.0: no filtering)")
     parser.add_argument("--do_lower_case", action='store_true', help="Set this flag if you are using an uncased model.")
 
@@ -156,7 +155,7 @@ def run():
 
     # Load KoGPT2 model and tokenizer
     tok_path = get_tokenizer()
-    gpt_model, gpt_vocab = get_pytorch_conkogpt2_model2(keyword_Module=args.keyword_Module, use_adapter=args.use_adapter)
+    gpt_model, gpt_vocab = get_pytorch_conkogpt2_model2(keyword_module=args.keyword_module, use_adapter=args.use_adapter)
     gpt_tokenizer = SentencepieceTokenizer(tok_path)
     gpt_model.to(args.device)
 

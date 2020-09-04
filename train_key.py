@@ -8,8 +8,6 @@ import logging
 from pprint import pformat
 from argparse import ArgumentParser
 from collections import defaultdict
-from itertools import chain
-import argparse
 import random
 import numpy as np
 
@@ -114,9 +112,10 @@ def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset.")
     parser.add_argument("--use_adapter", default=False, action='store_true', help="Use adapter or not")
-    parser.add_argument("--keyword_Module", type=str, default="", help="add, attention, ")
-    parser.add_argument("--train_batch_size", type=int, default=16, help="Batch size for training")
-    parser.add_argument("--valid_batch_size", type=int, default=16, help="Batch size for validation")
+    parser.add_argument("--keyword_module", type=str, default="", help="add, attention, ")
+    parser.add_argument("--model_checkpoint", type=str, default="bertGpt", help="Path, url or short name of the model")
+    parser.add_argument("--train_batch_size", type=int, default=4, help="Batch size for training")
+    parser.add_argument("--valid_batch_size", type=int, default=4, help="Batch size for validation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Clipping gradient norm")
@@ -162,7 +161,7 @@ def train():
 
     # Load KoGPT2 model and tokenizer
     tok_path = get_tokenizer()
-    gpt_model, gpt_vocab = get_pytorch_kogpt2_model(keyword_Module=args.keyword_Module, use_adapter=args.use_adapter)
+    gpt_model, gpt_vocab = get_pytorch_kogpt2_model(keyword_module=args.keyword_module, use_adapter=args.use_adapter)
     gpt_tokenizer = SentencepieceTokenizer(tok_path)
     gpt_model.to(args.device)
 
@@ -251,7 +250,7 @@ def train():
         evaluator.add_event_handler(Events.COMPLETED,
                                     lambda _: pbar.log_message("Validation: %s" % pformat(evaluator.state.metrics)))
 
-        log_dir = make_logdir(args.dataset_path, args.use_adapter, args.keyword_Module)
+        log_dir = make_logdir(args.model_checkpoint, args.dataset_path, args.use_adapter, args.keyword_module)
         tb_logger = TensorboardLogger(log_dir)
 
         tb_logger.attach(trainer, log_handler=OutputHandler(tag="training", metric_names=["loss"]), event_name=Events.ITERATION_COMPLETED)

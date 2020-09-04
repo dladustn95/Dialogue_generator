@@ -2,10 +2,8 @@ import os
 import logging
 import random
 from argparse import ArgumentParser
-from itertools import chain
 from pprint import pformat
 import warnings
-import datetime
 
 import torch
 import torch.nn.functional as F
@@ -14,12 +12,14 @@ from transformers import OpenAIGPTLMHeadModel, OpenAIGPTTokenizer, GPT2LMHeadMod
 from train import build_input_from_segments
 from utils import get_test_dataset, download_pretrained_model
 
-from kogpt2.pytorch_kogpt2 import get_pytorch_conkogpt2_model
+from kogpt2.pytorch_kogpt2 import get_pytorch_conkogpt2_model2
 from gluonnlp.data import SentencepieceTokenizer
 from kogpt2.utils import get_tokenizer
 
 from pytorch_pretrained_bert.modeling import BertModel
 from pytorch_pretrained_bert.tokenization2 import BertTokenizer
+
+from kogpt2.model.Seq2Seq import Seq2Seq
 
 def top_filtering(logits, top_k=0., top_p=0.9, threshold=-float('Inf'), filter_value=-float('Inf')):
     """ Filter a distribution of logits using top-k, top-p (nucleus) and/or threshold filtering
@@ -78,18 +78,6 @@ def sample_sequence(source, bert_model, bert_tokenizer, gpt_model, gpt_vocab, ar
             logits = logits[0]
         logits = logits[-1, :] / args.temperature
 
-        """
-        if i < args.min_length:
-            logits[1] = -float("inf")
-            logits[316] = -float("inf")
-            logits[2530] = -float("inf")
-            logits[6026] = -float("inf")
-            logits[47812] = -float("inf")
-            logits[47440] = -float("inf")
-            logits[47774] = -float("inf")
-            logits[47453] = -float("inf")
-        """
-
         logits = top_filtering(logits, top_k=args.top_k, top_p=args.top_p)
         probs = F.softmax(logits, dim=-1)
 
@@ -111,12 +99,13 @@ def sample_sequence(source, bert_model, bert_tokenizer, gpt_model, gpt_vocab, ar
 def run():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
-    parser.add_argument("--use_adapter", type=bool, default=True, help="Use adapter or not")
+    parser.add_argument("--use_adapter", default=False, action='store_true', help="Use adapter or not")
+    parser.add_argument("--keyword_module", type=str, default="", help="add, attention, ")
     parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (openai-gpt or gpt2)", choices=['openai-gpt', 'gpt2'])  # anything besides gpt2 will load openai-gpt
     parser.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
     parser.add_argument("--bert_model_path", default="./", type=str, help="Bert pre-trained model path")
-    parser.add_argument("--vocab_file", default="./vocab.korean_morp.list", type=str, help="The vocabulary file that the BERT model was trained on.")
+    parser.add_argument("--vocab_file", default="./vocab.korean.rawtext.list", type=str, help="The vocabulary file that the BERT model was trained on.")
     parser.add_argument("--no_sample", action='store_true', help="Set to use greedy decoding instead of sampling")
     parser.add_argument("--max_length", type=int, default=50, help="Maximum length of the output utterances")
     parser.add_argument("--min_length", type=int, default=1, help="Minimum length of the output utterances")
@@ -153,10 +142,15 @@ def run():
 
     # Load KoGPT2 model and tokenizer
     tok_path = get_tokenizer()
-    gpt_model, gpt_vocab = get_pytorch_conkogpt2_model(args.model_checkpoint, use_adapter=args.use_adapter)
+    gpt_model, gpt_vocab = get_pytorch_conkogpt2_model2(use_adapter=args.use_adapter)
     gpt_tokenizer = SentencepieceTokenizer(tok_path)
     gpt_model.to(args.device)
     gpt_model.eval()
+
+    model = Seq2Seq(bert_model, gpt_model, gpt_vocab, args)
+    model.load_state_dict(torch.load(args.model_checkpoint), strict=False)
+    model.to(args.device)
+    model.eval()
 
     logger.info("Load test data")
     sourceList, targetList = get_test_dataset(bert_tokenizer, gpt_tokenizer, gpt_vocab, args.dataset_path)
