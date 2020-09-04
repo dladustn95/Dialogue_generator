@@ -117,7 +117,7 @@ def run():
     parser.add_argument("--keyword_module", type=str, default="", help="add, attention, ")
     parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (openai-gpt or gpt2)", choices=['openai-gpt', 'gpt2'])  # anything besides gpt2 will load openai-gpt
     parser.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
-    parser.add_argument("--device", type=str, default="cpu" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
     parser.add_argument("--bert_model_path", default="./", type=str, help="Bert pre-trained model path")
     parser.add_argument("--vocab_file", default="./vocab.korean.rawtext.list", type=str, help="The vocabulary file that the BERT model was trained on.")
     parser.add_argument("--no_sample", action='store_true', help="Set to use greedy decoding instead of sampling")
