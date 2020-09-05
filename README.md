@@ -44,3 +44,10 @@ python infer.py --dataset_path DATAPATH/Name --model_checkpoint MODELPATH/MODEL.
 
 ```
 
+### Evaluation
+BLEU, Dist
+```sh
+python bleu_nmt.py DATAPATH/Name_test.txt 생성한문장.txt
+python dist.py 생성한문장.txt
+
+```
