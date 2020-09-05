@@ -142,13 +142,13 @@ class AttrDict(dict):
         self.__dict__ = self
 
 """
-def make_logdir(model_name: str, dataset_path: str, keyword_Module: str):
+def make_logdir(model_name: str, dataset_path: str, keyword_module: str):
     #Create unique path to save results and checkpoints, e.g. runs/Sep22_19-45-59_gpu-7_gpt2
     # Code copied from ignite repo
     current_time = datetime.now().strftime('%b%d_%H-%M')
     data = dataset_path.split("/")[-1]
     logdir = os.path.join(
-        'runs', data + '_' + current_time + '_' + model_name + '_' + keyword_Module)
+        'runs', data + '_' + current_time + '_' + model_name + '_' + keyword_module)
     return logdir"""
 
 def make_logdir(model_checkpoint: str, dataset_path: str, use_adapter: bool, keyword_module: str):
